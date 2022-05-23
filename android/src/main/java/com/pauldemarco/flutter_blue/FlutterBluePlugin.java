@@ -78,6 +78,10 @@ public class FlutterBluePlugin implements FlutterPlugin, ActivityAware, MethodCa
     private Activity activity;
 
     static final private UUID CCCD_ID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
+    private final static UUID CLIENT_CHARACTERISTIC_CONFIG_DESCRIPTOR_UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
+    private final static UUID GENERIC_ATTRIBUTE_SERVICE = UUID.fromString("00001801-0000-1000-8000-00805f9b34fb");
+    private final static UUID SERVICE_CHANGED_CHARACTERISTIC = UUID.fromString("00002A05-0000-1000-8000-00805f9b34fb");
+
     private final Map<String, BluetoothDeviceCache> mDevices = new HashMap<>();
     private LogLevel logLevel = LogLevel.EMERGENCY;
     
@@ -90,7 +94,48 @@ public class FlutterBluePlugin implements FlutterPlugin, ActivityAware, MethodCa
 
     private ArrayList<String> macDeviceScanned = new ArrayList<>();
     private boolean allowDuplicates = false;
+    private BluetoothGatt gattServer;
 
+    private boolean internalEnableIndications(final BluetoothGattCharacteristic characteristic) {
+        final BluetoothGatt gatt = gattServer;
+        if (gatt == null || characteristic == null)
+            return false;
+
+        // Check characteristic property
+        final int properties = characteristic.getProperties();
+        if ((properties & BluetoothGattCharacteristic.PROPERTY_INDICATE) == 0)
+            return false;
+
+        gatt.setCharacteristicNotification(characteristic, true);
+        final BluetoothGattDescriptor descriptor = characteristic.getDescriptor(CLIENT_CHARACTERISTIC_CONFIG_DESCRIPTOR_UUID);
+        if (descriptor != null) {
+            descriptor.setValue(BluetoothGattDescriptor.ENABLE_INDICATION_VALUE);
+            return internalWriteDescriptorWorkaround(descriptor);
+        }
+        return false;
+    }
+    /**
+     * There was a bug in Android up to 6.0 where the descriptor was written using parent
+     * characteristic's write type, instead of always Write With Response, as the spec says.
+     * <p>
+     *     See: <a href="https://android.googlesource.com/platform/frameworks/base/+/942aebc95924ab1e7ea1e92aaf4e7fc45f695a6c%5E%21/#F0">
+     *         https://android.googlesource.com/platform/frameworks/base/+/942aebc95924ab1e7ea1e92aaf4e7fc45f695a6c%5E%21/#F0</a>
+     * </p>
+     * @param descriptor the descriptor to be written
+     * @return the result of {@link BluetoothGatt#writeDescriptor(BluetoothGattDescriptor)}
+     */
+    private boolean internalWriteDescriptorWorkaround(final BluetoothGattDescriptor descriptor) {
+        final BluetoothGatt gatt = gattServer;
+        if (gatt == null || descriptor == null)
+            return false;
+
+        final BluetoothGattCharacteristic parentCharacteristic = descriptor.getCharacteristic();
+        final int originalWriteType = parentCharacteristic.getWriteType();
+        parentCharacteristic.setWriteType(BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
+        final boolean result = gattServer.writeDescriptor(descriptor);
+        parentCharacteristic.setWriteType(originalWriteType);
+        return result;
+    }
     /** Plugin registration. */
     public static void registerWith(Registrar registrar) {
         FlutterBluePlugin instance = new FlutterBluePlugin();
@@ -314,7 +359,7 @@ public class FlutterBluePlugin implements FlutterPlugin, ActivityAware, MethodCa
                     }
 
                     // New request, connect and add gattServer to Map
-                    BluetoothGatt gattServer;
+                    //BluetoothGatt gattServer;
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                         gattServer = device.connectGatt(context, options.getAndroidAutoConnect(), mGattCallback, BluetoothDevice.TRANSPORT_LE);
                     } else {
@@ -322,6 +367,7 @@ public class FlutterBluePlugin implements FlutterPlugin, ActivityAware, MethodCa
                     }
                     mDevices.put(deviceId, new BluetoothDeviceCache(gattServer));
                     result.success(null);
+                    //internalEnableIndications();
                 });
                 break;
             }
